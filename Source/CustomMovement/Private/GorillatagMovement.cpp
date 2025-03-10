@@ -165,15 +165,7 @@ void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
 	{
 		RigidBodyMovement = FirstIterationLeftHand + FirstIterationRightHand;
 	}
-
-	/// Aqui teria a parte de checar a cabeça.
-	/// Eu vou omitir isso por enquanto.
 	
-	if(RigidBodyMovement != FVector::Zero())
-	{
-		OwnerActor->SetActorLocation(OwnerActor->GetActorLocation() + RigidBodyMovement);
-	}
-
 	//Do Final LeftHand Position
 	DistanceTraveled = CurrentLeftHandPosition - LastLeftHandPosition;
 
@@ -200,21 +192,25 @@ void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
 	}
 
 	StoreVelocities(DeltaTime);
+
+	bool bIsGoingDown = DenormalizedVelocityAverage.Z < 0.01;
 	
 	if ((bRightHandColliding || bLeftHandColliding) && !bDisableMovement)
 	{
-		if (DenormalizedVelocityAverage.Length() > VelocityLimit)
+		if(!bIsGoingDown || DenormalizedVelocityAverage.Length() < VelocityLimit)
 		{
-			if (DenormalizedVelocityAverage.Length() * JumpMultiplier > MaxJumpSpeed)
+			if (DenormalizedVelocityAverage.Length() >= VelocityLimit)
 			{
-				BodyCollider->SetPhysicsLinearVelocity(DenormalizedVelocityAverage.GetSafeNormal() * MaxJumpSpeed);
-				GEngine->AddOnScreenDebugMessage(INDEX_NONE, 55, FColor::Red, FString::Printf(TEXT("Jumping max speed: %f"), MaxJumpSpeed));
+				BodyCollider->SetPhysicsLinearVelocity(JumpMultiplier * DenormalizedVelocityAverage, true);
+				if(BodyCollider->GetPhysicsLinearVelocity().Length() > MaxJumpSpeed)
+				{
+					BodyCollider->SetPhysicsLinearVelocity(BodyCollider->GetPhysicsLinearVelocity().GetSafeNormal() * MaxJumpSpeed);
+				}
 			}
-			else
-			{
-				BodyCollider->SetPhysicsLinearVelocity(JumpMultiplier * DenormalizedVelocityAverage);
-				GEngine->AddOnScreenDebugMessage(INDEX_NONE, 55, FColor::Red, FString::Printf(TEXT("Jumping speed: %f"), (JumpMultiplier * DenormalizedVelocityAverage).Length()));
-			}
+		}
+		if(RigidBodyMovement != FVector::Zero())
+		{
+			OwnerActor->SetActorLocation(OwnerActor->GetActorLocation() + RigidBodyMovement);
 		}
 	}
 
