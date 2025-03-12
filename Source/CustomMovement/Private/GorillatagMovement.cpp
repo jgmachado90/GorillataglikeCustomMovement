@@ -27,15 +27,13 @@ void UGorillatagMovement::MovementInitialization()
 	if (!OwnerActor) return;
 
 	BodyCollider = Cast<UCapsuleComponent>(OwnerActor->GetRootComponent());
-
-	VelocityHistory.Init(FVector::ZeroVector, VelocityHistorySize);
-	
 	Head = OwnerActor->FindComponentByClass<UCameraComponent>();
-
-	InitializeHandReferences();
 	
+	VelocityHistory.Init(FVector::ZeroVector, VelocityHistorySize);
+	DenormalizedVelocityAverage = FVector::ZeroVector;
 	VelocityIndex = 0;
 
+	InitializeHandReferences();
 	LastLocation = OwnerActor->GetActorLocation();
 }
 
@@ -61,34 +59,30 @@ void UGorillatagMovement::InitializeHandReferences()
 			LeftHandFollower = NewHand;
 			LeftHandTransform = Hand;
 			LastLeftHandPosition = LeftHandTransform->GetComponentLocation();
-			UE_LOG(LogTemp, Warning, TEXT("Set Left Hand"));
 		}
 		else
 		{
 			RightHandFollower = NewHand;
 			RightHandTransform = Hand;
 			LastRightHandPosition = RightHandTransform->GetComponentLocation();
-			UE_LOG(LogTemp, Warning, TEXT("Set Right Hand"));
 		}
 	}
 }
 
-FVector UGorillatagMovement::CurrentHandPosition(FTransform HandTransform, FVector HandOffset)
+FVector UGorillatagMovement::CurrentHandPosition(FTransform HandTransform)
 {
 	FVector HeadLocation = Head->GetComponentLocation();
-	if ((PositionWithOffset(HandTransform, HandOffset) - HeadLocation).Length() < MaxArmLength)
+	if ((HandTransform.GetLocation() - HeadLocation).Length() < MaxArmLength)
 	{
-		return PositionWithOffset(HandTransform, HandOffset);
+		return HandTransform.GetLocation();
 	}
-	return HeadLocation + (PositionWithOffset(HandTransform, HandOffset) - HeadLocation).GetSafeNormal() * MaxArmLength;
+	return HeadLocation + (HandTransform.GetLocation() - HeadLocation).GetSafeNormal() * MaxArmLength;
 }
 
-FVector UGorillatagMovement::PositionWithOffset(FTransform TransformToModify, FVector OffsetVector)
+void UGorillatagMovement::AddMinVelocityToJump(float Value)
 {
-	FVector WorldPosition = TransformToModify.GetLocation();
-	FQuat WorldRotation = TransformToModify.GetRotation();
-	FVector TransformedOffset = WorldRotation.RotateVector(OffsetVector);
-	return WorldPosition + TransformedOffset;
+	MinVelocityToJump = std::max(MinVelocityToJump + Value, 0.0f);
+	GEngine->AddOnScreenDebugMessage(INDEX_NONE, 55, FColor::Blue, FString::Printf(TEXT("Velocity= %f"), MinVelocityToJump));
 }
 
 void UGorillatagMovement::SetHand(AGorillaTagHand* Hand, bool Left)
@@ -111,12 +105,12 @@ void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
 	bool bLeftHandColliding = false;
 	bool bRightHandColliding = false;
 	FVector FinalPosition;
-	FVector RigidBodyMovement = FVector::Zero();
 	FVector FirstIterationLeftHand = FVector::Zero();
 	FVector FirstIterationRightHand = FVector::Zero();
+	FVector RigidBodyMovement = FVector::Zero();
 
-	FVector CurrentLeftHandPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform(), LeftHandOffset);
-	FVector CurrentRightHandPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform(), RightHandOffset);
+	FVector CurrentLeftHandPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform()); 
+	FVector CurrentRightHandPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform());
 
 	FVector DistanceTraveled = CurrentLeftHandPosition - LastLeftHandPosition + FVector::DownVector * 2 * 980 * DeltaTime * DeltaTime;
 
@@ -131,7 +125,7 @@ void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
 		{
 			FirstIterationLeftHand = FinalPosition - CurrentLeftHandPosition;
 		}
-		BodyCollider->SetPhysicsLinearVelocity(FVector::Zero());
+		//BodyCollider->SetPhysicsLinearVelocity(FVector::Zero());
 
 		bLeftHandColliding = true;
 	}
@@ -150,7 +144,7 @@ void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
 			FirstIterationRightHand = FinalPosition - CurrentRightHandPosition;
 		}
 		
-		BodyCollider->SetPhysicsLinearVelocity(FVector::Zero());
+		//BodyCollider->SetPhysicsLinearVelocity(FVector::Zero());
 
 		bRightHandColliding = true;
 	}
@@ -197,40 +191,23 @@ void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
 	
 	if ((bRightHandColliding || bLeftHandColliding) && !bDisableMovement)
 	{
-		if(!bIsGoingDown || DenormalizedVelocityAverage.Length() < VelocityLimit)
+		if(!bIsGoingDown && DenormalizedVelocityAverage.Length() > MinVelocityToJump)
 		{
-			if (DenormalizedVelocityAverage.Length() >= VelocityLimit)
+			BodyCollider->SetPhysicsLinearVelocity(JumpMultiplier * DenormalizedVelocityAverage * DeltaTime, true);
+			if(BodyCollider->GetPhysicsLinearVelocity().Length() > MaxJumpSpeed)
 			{
-				BodyCollider->SetPhysicsLinearVelocity(JumpMultiplier * DenormalizedVelocityAverage, true);
-				if(BodyCollider->GetPhysicsLinearVelocity().Length() > MaxJumpSpeed)
-				{
-					BodyCollider->SetPhysicsLinearVelocity(BodyCollider->GetPhysicsLinearVelocity().GetSafeNormal() * MaxJumpSpeed);
-				}
+				BodyCollider->SetPhysicsLinearVelocity(BodyCollider->GetPhysicsLinearVelocity().GetSafeNormal() * MaxJumpSpeed);
 			}
 		}
-		if(RigidBodyMovement != FVector::Zero())
+		else if(RigidBodyMovement != FVector::Zero())
 		{
 			OwnerActor->SetActorLocation(OwnerActor->GetActorLocation() + RigidBodyMovement);
+			BodyCollider->SetPhysicsLinearVelocity(FVector::Zero());
 		}
 	}
-
 
 	CheckHandUnstick(CurrentLeftHandPosition, bLeftHandColliding, true);
 	CheckHandUnstick(CurrentRightHandPosition, bRightHandColliding, false);
-	//check to see if left hand is stuck and we should unstick it
-
-	if(LeftHandFollower == nullptr)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Left hand Null"));
-		return;
-	}
-
-	if(RightHandFollower == nullptr)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Right Hand Null"));
-		return;
-	}
-	
 	
 	LeftHandFollower->SetActorLocation(LastLeftHandPosition);
 	RightHandFollower->SetActorLocation(LastRightHandPosition);
@@ -260,7 +237,6 @@ void UGorillatagMovement::CheckHandUnstick(FVector& CurrentHandPosition, bool& H
 		if (!GetWorld()->SweepSingleByChannel(HitInfo, HeadPosition, HeadPosition + Direction * Distance, FQuat::Identity, ECC_WorldStatic , FCollisionShape::MakeSphere(MinimumRaycastRadius * DefaultPrecision), CollisionParams))
 		{
 			HandColliding = false;
-			GEngine->AddOnScreenDebugMessage(INDEX_NONE, 55, FColor::Blue, FString::Printf(TEXT("Descolou as mãos")));
 
 			if(bLeft)
 			{
@@ -280,6 +256,21 @@ void UGorillatagMovement::StoreVelocities(float DeltaTime)
 	DenormalizedVelocityAverage += (CurrentVelocity - OldestVelocity) / (float)VelocityHistorySize;
 	VelocityHistory[VelocityIndex] = CurrentVelocity;
 	LastLocation = OwnerActor->GetActorLocation();
+}
+
+void UGorillatagMovement::StoreVelocitiesNew(float DeltaTime)
+{
+	VelocityIndex = (VelocityIndex + 1) % VelocityHistorySize;
+	CurrentVelocity = (OwnerActor->GetActorLocation() - LastLocation) / DeltaTime;
+	VelocityHistory[VelocityIndex] = CurrentVelocity;
+	LastLocation = OwnerActor->GetActorLocation();
+	
+	DenormalizedVelocityAverage = FVector::ZeroVector;
+	for (int i = 0; i < VelocityHistorySize; ++i)
+	{
+		DenormalizedVelocityAverage += VelocityHistory[i];
+	}
+	DenormalizedVelocityAverage /= (float)VelocityHistorySize;
 }
 
 bool UGorillatagMovement::IterativeCollisionSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector, float Precision, FVector& EndPosition, bool bSingleHand)

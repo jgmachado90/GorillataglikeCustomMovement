@@ -25,10 +25,10 @@ public:
 	void MovementInitialization();
 
 	UFUNCTION(BlueprintCallable)
-	FVector CurrentHandPosition(FTransform HandTransform, FVector HandOffset);
+	FVector CurrentHandPosition(FTransform HandTransform);
 
 	UFUNCTION(BlueprintCallable)
-	FVector PositionWithOffset(FTransform TransformToModify, FVector OffsetVector);
+	void AddMinVelocityToJump(float Value);
 
 	UFUNCTION(BlueprintCallable)
 	void SetHand(AGorillaTagHand* Hand, bool Left);
@@ -113,7 +113,7 @@ public:
 	bool bDisableMovement;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float VelocityLimit = 1000;
+	float MinVelocityToJump = 1000;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float JumpMultiplier = 100;
@@ -135,6 +135,9 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
 	                           FActorComponentTickFunction* ThisTickFunction) override;
 	void StoreVelocities(float DeltaTime);
+
+	void StoreVelocitiesNew(float DeltaTime);
+	
 	bool IterativeCollisionSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector,
 	                                  float Precision,
 	                                  FVector& OutEndPosition, bool bSingleHand);
