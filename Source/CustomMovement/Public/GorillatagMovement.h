@@ -62,6 +62,12 @@ public:
 	UMotionControllerComponent* RightHandTransform;
 
 	UPROPERTY(BlueprintReadWrite)
+	FVector LastLeftHandCollisionPosition;
+
+	UPROPERTY(BlueprintReadWrite)
+	FVector LastRightHandCollisionPosition;
+	
+	UPROPERTY(BlueprintReadWrite)
 	FVector LastLeftHandPosition;
 
 	UPROPERTY(BlueprintReadWrite)
@@ -124,11 +130,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float UnStickDistance = 10;
 
-	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float OffsetMovementSpeed = 5;
 
 protected:
 	// Called when the game starts
 	virtual void BeginPlay() override;
+
+	UPROPERTY()
+	bool Jumping = false;
 
 public:
 	// Called every frame
@@ -137,7 +147,14 @@ public:
 	void StoreVelocities(float DeltaTime);
 	bool IterativeCollisionSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector,
 	                                  float Precision,
-	                                  FVector& OutEndPosition, bool bSingleHand);
+	                                  FVector& OutEndPosition);
 	bool CollisionsSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector, float Precision,
 	                          FVector& FinalPosition, FHitResult& HitInfo) const;
+	void ProcessHandOffset(float DeltaTime, bool& bHandColliding, const bool& bWasHandTouching, FVector& HandDeltaMovement, const FVector& CurrentHandPosition, FVector& LastHandPositionCollision, FVector& LastHandPosition);
+
+	UFUNCTION()
+	void ProcessOffset(float DeltaTime);
+
+	UFUNCTION()
+	void ProcessJump(float DeltaTime);
 };
