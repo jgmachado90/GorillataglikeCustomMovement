@@ -101,6 +101,211 @@ void UGorillatagMovement::SetHand(AGorillaTagHand* Hand, bool Left)
 	RightHandFollower = Hand;
 }
 
+void UGorillatagMovement::ProcessOffset(float DeltaTime)
+{
+	bool bLeftHandColliding = false;
+	bool bRightHandColliding = false;
+	FVector HandDeltaMovementLeft = FVector::Zero();
+	FVector HandDeltaMovementRight = FVector::Zero();
+	const FVector CurrentLeftHandPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform(), LeftHandOffset);
+	const FVector CurrentRightHandPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform(), RightHandOffset);
+	
+	ProcessHandOffset(DeltaTime, bLeftHandColliding, bWasLeftHandTouching, HandDeltaMovementLeft, CurrentLeftHandPosition,LastLeftHandCollisionPosition,LastLeftHandPosition);
+	ProcessHandOffset(DeltaTime, bRightHandColliding, bWasRightHandTouching, HandDeltaMovementRight, CurrentRightHandPosition,LastRightHandCollisionPosition,LastRightHandPosition);
+
+	const bool OneHandColliding = (bLeftHandColliding || bWasLeftHandTouching) || (bRightHandColliding || bWasRightHandTouching);
+	const bool TwoHandsColliding = (bLeftHandColliding || bWasLeftHandTouching) && (bRightHandColliding || bWasRightHandTouching);
+	const FVector TwoHandsMovement = HandDeltaMovementLeft + HandDeltaMovementRight;
+	const FVector RigidBodyMovement = TwoHandsColliding ? TwoHandsMovement / 2.0f : TwoHandsMovement;
+	BodyCollider->SetEnableGravity(!OneHandColliding);
+	if(RigidBodyMovement != FVector::Zero())
+	{
+		//BodyCollider->SetSimulatePhysics(false);
+		auto Result = FMath::Lerp(OwnerActor->GetActorLocation(),OwnerActor->GetActorLocation() + RigidBodyMovement,DeltaTime*OffsetMovementSpeed);
+		OwnerActor->SetActorLocation(Result,false);
+		//OwnerActor->SetActorLocation(OwnerActor->GetActorLocation() + RigidBodyMovement);
+	}
+
+	bWasLeftHandTouching = bLeftHandColliding;
+	bWasRightHandTouching = bRightHandColliding;
+
+	LeftHandFollower->SetActorLocation(LastLeftHandCollisionPosition);
+	RightHandFollower->SetActorLocation(LastRightHandCollisionPosition);
+
+	if (OneHandColliding)
+	{
+		StoreVelocities(DeltaTime);
+		const auto CanJump = DenormalizedVelocityAverage.Length() > VelocityLimit && DenormalizedVelocityAverage.Z > 0.0f;
+		if (CanJump)
+		{
+			Jump();
+		}
+	}else
+	{
+		ResetVelocities();
+	}
+}
+
+void UGorillatagMovement::ProcessHandOffset(float DeltaTime, bool& bHandColliding, const bool& bWasHandTouching, FVector& HandDeltaMovement, const FVector& CurrentHandPosition, FVector& LastHandPositionCollision,  FVector& LastHandPosition)
+{
+	FVector FinalPosition;
+	FVector DistanceTraveled = CurrentHandPosition - LastHandPositionCollision + FVector::DownVector * 2 * 980 * DeltaTime * DeltaTime;
+	
+	if (IterativeCollisionSphereCast(LastHandPositionCollision, MinimumRaycastRadius, DistanceTraveled, DefaultPrecision,  FinalPosition))
+	{
+		HandDeltaMovement = bWasHandTouching ? LastHandPositionCollision - CurrentHandPosition : FinalPosition - CurrentHandPosition;
+		LastHandPositionCollision = FinalPosition;
+		bHandColliding = true;
+	}
+	else
+	{
+		LastHandPositionCollision = CurrentHandPosition;
+	}
+
+	LastHandPosition = CurrentHandPosition;
+
+	// DistanceTraveled = CurrentHandPosition - LastHandPosition;
+	//
+	// if (IterativeCollisionSphereCast(LastHandPosition, MinimumRaycastRadius, DistanceTraveled, DefaultPrecision, FinalPosition))
+	// {
+	// 	LastHandPosition = FinalPosition;
+	// 	bHandColliding = true;
+	// }
+	// else
+	// {
+	// 	LastHandPosition = CurrentHandPosition;
+	// }
+}
+
+void UGorillatagMovement::Jump()
+{
+	Jumping = true;
+	const FVector JumpForce = DenormalizedVelocityAverage.Length() * JumpMultiplier > MaxJumpSpeed ?
+	 	                          DenormalizedVelocityAverage.GetSafeNormal() * MaxJumpSpeed :
+	 	                          JumpMultiplier * DenormalizedVelocityAverage;
+	BodyCollider->SetEnableGravity(true);
+	BodyCollider->SetPhysicsLinearVelocity(JumpForce);
+	GEngine->AddOnScreenDebugMessage(INDEX_NONE, 5, FColor::Red, FString::Printf(TEXT("Jumping speed: %f"), (JumpForce).Length()));
+	ResetVelocities();
+}
+
+void UGorillatagMovement::ProcessJump(float DeltaTime)
+{
+	StoreVelocities(DeltaTime);
+	const auto CanEndJump = DenormalizedVelocityAverage.Z <= 0.0f;
+	if (CanEndJump)
+	{
+		Jumping = false;
+		ResetVelocities();
+	}
+}
+
+void UGorillatagMovement::StoreVelocities(float DeltaTime)
+{
+	VelocityIndex = (VelocityIndex + 1) % VelocityHistorySize;
+	FVector OldestVelocity = VelocityHistory[VelocityIndex];
+	CurrentVelocity = (OwnerActor->GetActorLocation() - LastLocation) / DeltaTime;
+	DenormalizedVelocityAverage += (CurrentVelocity - OldestVelocity) / (float)VelocityHistorySize;
+	VelocityHistory[VelocityIndex] = CurrentVelocity;
+	LastLocation = OwnerActor->GetActorLocation();
+}
+
+void UGorillatagMovement::ResetVelocities()
+{
+	for (int i = 0; i < VelocityHistory.Num(); ++i)
+	{
+		VelocityHistory[i] = FVector::Zero();
+	}
+	DenormalizedVelocityAverage = FVector::Zero();
+	LastLocation = GetOwner()->GetActorLocation();
+	bWasLeftHandTouching = false;
+	bWasRightHandTouching = false;
+	LastLeftHandCollisionPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform(), LeftHandOffset);
+	LastRightHandCollisionPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform(), RightHandOffset);
+}
+
+bool UGorillatagMovement::IterativeCollisionSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector, float Precision, FVector& EndPosition)
+{
+    FHitResult HitInfo;
+    FVector MovementToProjectedAboveCollisionPlane;
+    float SlipPercentage = DefaultSlideFactor;
+    
+    // First spherecast from the starting position to the final position
+    if (CollisionsSphereCast(StartPosition, SphereRadius * Precision, MovementVector, Precision, EndPosition, HitInfo))
+    {
+        // // If we hit a surface, do a bit of a slide
+        // FVector FirstPosition = EndPosition;
+        // MovementToProjectedAboveCollisionPlane = FVector::VectorPlaneProject(StartPosition + MovementVector - FirstPosition, HitInfo.Normal) * SlipPercentage;
+        //
+        // if (CollisionsSphereCast(EndPosition, SphereRadius, MovementToProjectedAboveCollisionPlane, Precision * Precision, EndPosition, HitInfo))
+        // {
+        //     // If we hit trying to move perpendicularly, stop there and our end position is the final spot we hit
+        //     return true;
+        // }
+        // if (CollisionsSphereCast(MovementToProjectedAboveCollisionPlane + FirstPosition, SphereRadius, StartPosition + MovementVector - (MovementToProjectedAboveCollisionPlane + FirstPosition), Precision * Precision * Precision, EndPosition, HitInfo))
+        // {
+        //     // If we hit, then return the spot we hit
+        //     return true;
+        // }
+        // // This shouldn't really happen, so back off
+        // EndPosition = FirstPosition;
+        return true;
+    }
+    // As a sanity check, try a smaller spherecast
+    if (CollisionsSphereCast(StartPosition, SphereRadius * Precision * 0.66f, MovementVector.GetSafeNormal() * (MovementVector.Size() + SphereRadius * Precision * 0.34f), Precision * 0.66f, EndPosition, HitInfo))
+    {
+        EndPosition = StartPosition;
+        return true;
+    }
+	
+    EndPosition = FVector::ZeroVector;
+    return false;
+}
+
+bool UGorillatagMovement::CollisionsSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector, float Precision, FVector& FinalPosition, FHitResult& HitInfo) const
+{
+	FHitResult InnerHit;
+	FCollisionQueryParams CollisionParams;
+	CollisionParams.bTraceComplex = true;
+	CollisionParams.bReturnPhysicalMaterial = true;
+	CollisionParams.bDebugQuery = true;
+	CollisionParams.AddIgnoredActor(OwnerActor);
+	TArray<AActor*> IgnoreActors;
+	IgnoreActors.Add(OwnerActor);
+	
+	// Initial spherecast
+	
+	if (UKismetSystemLibrary::SphereTraceSingle(this, StartPosition,StartPosition + MovementVector,SphereRadius * Precision,UEngineTypes::ConvertToTraceType(ECC_WorldStatic),true,IgnoreActors,EDrawDebugTrace::Type::ForOneFrame,HitInfo,true))
+	{
+		// If we hit, we're trying to move to a position a sphere radius distance from the normal
+		FinalPosition = HitInfo.Location + HitInfo.Normal * SphereRadius;
+
+		// Check a spherecast from the original position to the intended final position
+		
+		if (UKismetSystemLibrary::SphereTraceSingle(this, StartPosition,FinalPosition,SphereRadius * Precision * Precision,UEngineTypes::ConvertToTraceType(ECC_WorldStatic),true,IgnoreActors,EDrawDebugTrace::Type::ForOneFrame,InnerHit,true))
+		{
+			FinalPosition = StartPosition + (FinalPosition - StartPosition).GetSafeNormal() * FMath::Max(0.0f, HitInfo.Distance - SphereRadius * (1.0f - Precision * Precision));
+			HitInfo = InnerHit;
+		}
+		// Bonus raycast check to make sure that something odd didn't happen with the spherecast
+		else if (UKismetSystemLibrary::LineTraceSingle(this, StartPosition,FinalPosition,UEngineTypes::ConvertToTraceType(ECC_WorldStatic),true,IgnoreActors,EDrawDebugTrace::Type::ForOneFrame,InnerHit,true))
+		{
+			FinalPosition = StartPosition;
+			HitInfo = InnerHit;
+			return true;
+		}
+		return true;
+	}
+	// Anti-clipping through geometry check
+	if (GetWorld()->LineTraceSingleByChannel(HitInfo, StartPosition, StartPosition + MovementVector, ECC_WorldStatic , CollisionParams))
+	{
+		FinalPosition = StartPosition;
+		return true;
+	}
+	
+	FinalPosition = FVector::ZeroVector;
+	return false;
+}
 
 // Called every frame
 void UGorillatagMovement::TickComponent(float DeltaTime, ELevelTick TickType,
@@ -286,166 +491,7 @@ void UGorillatagMovement::CheckHandUnstick(FVector& CurrentHandPosition, bool& H
 	}
 }
 
-void UGorillatagMovement::StoreVelocities(float DeltaTime)
-{
-	VelocityIndex = (VelocityIndex + 1) % VelocityHistorySize;
-	FVector OldestVelocity = VelocityHistory[VelocityIndex];
-	CurrentVelocity = (OwnerActor->GetActorLocation() - LastLocation) / DeltaTime;
-	DenormalizedVelocityAverage += (CurrentVelocity - OldestVelocity) / (float)VelocityHistorySize;
-	VelocityHistory[VelocityIndex] = CurrentVelocity;
-	LastLocation = OwnerActor->GetActorLocation();
-}
 
-bool UGorillatagMovement::IterativeCollisionSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector, float Precision, FVector& EndPosition)
-{
-    FHitResult HitInfo;
-    FVector MovementToProjectedAboveCollisionPlane;
-    float SlipPercentage = DefaultSlideFactor;
-    
-    // First spherecast from the starting position to the final position
-    if (CollisionsSphereCast(StartPosition, SphereRadius * Precision, MovementVector, Precision, EndPosition, HitInfo))
-    {
-        // // If we hit a surface, do a bit of a slide
-        // FVector FirstPosition = EndPosition;
-        // MovementToProjectedAboveCollisionPlane = FVector::VectorPlaneProject(StartPosition + MovementVector - FirstPosition, HitInfo.Normal) * SlipPercentage;
-        //
-        // if (CollisionsSphereCast(EndPosition, SphereRadius, MovementToProjectedAboveCollisionPlane, Precision * Precision, EndPosition, HitInfo))
-        // {
-        //     // If we hit trying to move perpendicularly, stop there and our end position is the final spot we hit
-        //     return true;
-        // }
-        // if (CollisionsSphereCast(MovementToProjectedAboveCollisionPlane + FirstPosition, SphereRadius, StartPosition + MovementVector - (MovementToProjectedAboveCollisionPlane + FirstPosition), Precision * Precision * Precision, EndPosition, HitInfo))
-        // {
-        //     // If we hit, then return the spot we hit
-        //     return true;
-        // }
-        // // This shouldn't really happen, so back off
-        // EndPosition = FirstPosition;
-        return true;
-    }
-    // As a sanity check, try a smaller spherecast
-    if (CollisionsSphereCast(StartPosition, SphereRadius * Precision * 0.66f, MovementVector.GetSafeNormal() * (MovementVector.Size() + SphereRadius * Precision * 0.34f), Precision * 0.66f, EndPosition, HitInfo))
-    {
-        EndPosition = StartPosition;
-        return true;
-    }
-	
-    EndPosition = FVector::ZeroVector;
-    return false;
-}
 
-bool UGorillatagMovement::CollisionsSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector, float Precision, FVector& FinalPosition, FHitResult& HitInfo) const
-{
-	FHitResult InnerHit;
-	FCollisionQueryParams CollisionParams;
-	CollisionParams.bTraceComplex = true;
-	CollisionParams.bReturnPhysicalMaterial = true;
-	CollisionParams.bDebugQuery = true;
-	CollisionParams.AddIgnoredActor(OwnerActor);
-	TArray<AActor*> IgnoreActors;
-	IgnoreActors.Add(OwnerActor);
-	
-	// Initial spherecast
-	
-	if (UKismetSystemLibrary::SphereTraceSingle(this, StartPosition,StartPosition + MovementVector,SphereRadius * Precision,UEngineTypes::ConvertToTraceType(ECC_WorldStatic),true,IgnoreActors,EDrawDebugTrace::Type::ForOneFrame,HitInfo,true))
-	{
-		// If we hit, we're trying to move to a position a sphere radius distance from the normal
-		FinalPosition = HitInfo.Location + HitInfo.Normal * SphereRadius;
 
-		// Check a spherecast from the original position to the intended final position
-		
-		if (UKismetSystemLibrary::SphereTraceSingle(this, StartPosition,FinalPosition,SphereRadius * Precision * Precision,UEngineTypes::ConvertToTraceType(ECC_WorldStatic),true,IgnoreActors,EDrawDebugTrace::Type::ForOneFrame,InnerHit,true))
-		{
-			FinalPosition = StartPosition + (FinalPosition - StartPosition).GetSafeNormal() * FMath::Max(0.0f, HitInfo.Distance - SphereRadius * (1.0f - Precision * Precision));
-			HitInfo = InnerHit;
-		}
-		// Bonus raycast check to make sure that something odd didn't happen with the spherecast
-		else if (UKismetSystemLibrary::LineTraceSingle(this, StartPosition,FinalPosition,UEngineTypes::ConvertToTraceType(ECC_WorldStatic),true,IgnoreActors,EDrawDebugTrace::Type::ForOneFrame,InnerHit,true))
-		{
-			FinalPosition = StartPosition;
-			HitInfo = InnerHit;
-			return true;
-		}
-		return true;
-	}
-	// Anti-clipping through geometry check
-	if (GetWorld()->LineTraceSingleByChannel(HitInfo, StartPosition, StartPosition + MovementVector, ECC_WorldStatic , CollisionParams))
-	{
-		FinalPosition = StartPosition;
-		return true;
-	}
-	
-	FinalPosition = FVector::ZeroVector;
-	return false;
-}
-
-void UGorillatagMovement::ProcessHandOffset(float DeltaTime, bool& bHandColliding, const bool& bWasHandTouching, FVector& HandDeltaMovement, const FVector& CurrentHandPosition, FVector& LastHandPositionCollision,  FVector& LastHandPosition)
-{
-	FVector FinalPosition;
-	FVector DistanceTraveled = CurrentHandPosition - LastHandPositionCollision + FVector::DownVector * 2 * 980 * DeltaTime * DeltaTime;
-	
-	if (IterativeCollisionSphereCast(LastHandPositionCollision, MinimumRaycastRadius, DistanceTraveled, DefaultPrecision,  FinalPosition))
-	{
-		HandDeltaMovement = bWasHandTouching ? LastHandPositionCollision - CurrentHandPosition : FinalPosition - CurrentHandPosition;
-		LastHandPositionCollision = FinalPosition;
-		bHandColliding = true;
-	}
-	else
-	{
-		LastHandPositionCollision = CurrentHandPosition;
-	}
-
-	LastHandPosition = CurrentHandPosition;
-
-	// DistanceTraveled = CurrentHandPosition - LastHandPosition;
-	//
-	// if (IterativeCollisionSphereCast(LastHandPosition, MinimumRaycastRadius, DistanceTraveled, DefaultPrecision, FinalPosition))
-	// {
-	// 	LastHandPosition = FinalPosition;
-	// 	bHandColliding = true;
-	// }
-	// else
-	// {
-	// 	LastHandPosition = CurrentHandPosition;
-	// }
-}
-
-void UGorillatagMovement::ProcessOffset(float DeltaTime)
-{
-	bool bLeftHandColliding = false;
-	bool bRightHandColliding = false;
-	FVector HandDeltaMovementLeft = FVector::Zero();
-	FVector HandDeltaMovementRight = FVector::Zero();
-	FVector CurrentLeftHandPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform(), LeftHandOffset);
-	FVector CurrentRightHandPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform(), RightHandOffset);
-	
-	ProcessHandOffset(DeltaTime, bLeftHandColliding, bWasLeftHandTouching, HandDeltaMovementLeft, CurrentLeftHandPosition,LastLeftHandCollisionPosition,LastLeftHandPosition);
-	ProcessHandOffset(DeltaTime, bRightHandColliding, bWasRightHandTouching, HandDeltaMovementRight, CurrentRightHandPosition,LastRightHandCollisionPosition,LastRightHandPosition);
-
-	bool OneHandColliding = (bLeftHandColliding || bWasLeftHandTouching) || (bRightHandColliding || bWasRightHandTouching);
-	bool TwoHandsColliding = (bLeftHandColliding || bWasLeftHandTouching) && (bRightHandColliding || bWasRightHandTouching);
-	FVector TwoHandsMovement = HandDeltaMovementLeft + HandDeltaMovementRight;
-	FVector RigidBodyMovement = TwoHandsColliding ? TwoHandsMovement / 2.0f : TwoHandsMovement;
-	BodyCollider->SetEnableGravity(!OneHandColliding);
-	if(RigidBodyMovement != FVector::Zero())
-	{
-		
-		//BodyCollider->SetSimulatePhysics(false);
-		auto Result = FMath::Lerp(OwnerActor->GetActorLocation(),OwnerActor->GetActorLocation() + RigidBodyMovement,DeltaTime*OffsetMovementSpeed);
-		OwnerActor->SetActorLocation(Result,false);
-		//OwnerActor->SetActorLocation(OwnerActor->GetActorLocation() + RigidBodyMovement);
-	}
-	//LastLeftHandPosition = CurrentLeftHandPosition + FirstIterationLeftHand;
-	//LastRightHandPosition = CurrentRightHandPosition + FirstIterationRightHand;
-
-	bWasLeftHandTouching = bLeftHandColliding;
-	bWasRightHandTouching = bRightHandColliding;
-
-	LeftHandFollower->SetActorLocation(LastLeftHandCollisionPosition);
-	RightHandFollower->SetActorLocation(LastRightHandCollisionPosition);
-}
-
-void UGorillatagMovement::ProcessJump(float DeltaTime)
-{
-}
 

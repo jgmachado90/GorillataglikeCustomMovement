@@ -32,6 +32,7 @@ public:
 
 	UFUNCTION(BlueprintCallable)
 	void SetHand(AGorillaTagHand* Hand, bool Left);
+	void Jump();
 
 	UFUNCTION()
 	void CheckHandUnstick(FVector& CurrentHandPosition, bool& HandColliding, bool bLeft);
@@ -145,6 +146,10 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
 	                           FActorComponentTickFunction* ThisTickFunction) override;
 	void StoreVelocities(float DeltaTime);
+
+	UFUNCTION()
+	void ResetVelocities();
+	
 	bool IterativeCollisionSphereCast(FVector StartPosition, float SphereRadius, FVector MovementVector,
 	                                  float Precision,
 	                                  FVector& OutEndPosition);
