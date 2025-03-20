@@ -180,9 +180,10 @@ void UGorillatagMovement::ProcessHandOffset(float DeltaTime, bool& bHandCollidin
 void UGorillatagMovement::Jump()
 {
 	Jumping = true;
-	const FVector JumpForce = DenormalizedVelocityAverage.Length() * JumpMultiplier > MaxJumpSpeed ?
+	FVector JumpForce = DenormalizedVelocityAverage * JumpMultiplier;
+	JumpForce = JumpForce.Length() > MaxJumpSpeed ?
 	 	                          DenormalizedVelocityAverage.GetSafeNormal() * MaxJumpSpeed :
-	 	                          JumpMultiplier * DenormalizedVelocityAverage;
+	 	                          JumpForce;
 	BodyCollider->SetEnableGravity(true);
 	BodyCollider->SetPhysicsLinearVelocity(JumpForce);
 	GEngine->AddOnScreenDebugMessage(INDEX_NONE, 5, FColor::Red, FString::Printf(TEXT("Jumping speed: %f"), (JumpForce).Length()));
