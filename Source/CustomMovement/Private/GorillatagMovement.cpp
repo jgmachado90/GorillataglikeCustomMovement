@@ -107,8 +107,8 @@ void UGorillatagMovement::ProcessOffset(float DeltaTime)
 	bool bRightHandColliding = false;
 	FVector HandDeltaMovementLeft = FVector::Zero();
 	FVector HandDeltaMovementRight = FVector::Zero();
-	const FVector CurrentLeftHandPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform(), LeftHandOffset);
-	const FVector CurrentRightHandPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform(), RightHandOffset);
+	FVector CurrentLeftHandPosition = CurrentHandPosition(LeftHandTransform->GetComponentTransform(), LeftHandOffset);
+	FVector CurrentRightHandPosition = CurrentHandPosition(RightHandTransform->GetComponentTransform(), RightHandOffset);
 	
 	ProcessHandOffset(DeltaTime, bLeftHandColliding, bWasLeftHandTouching, HandDeltaMovementLeft, CurrentLeftHandPosition,LastLeftHandCollisionPosition,LastLeftHandPosition);
 	ProcessHandOffset(DeltaTime, bRightHandColliding, bWasRightHandTouching, HandDeltaMovementRight, CurrentRightHandPosition,LastRightHandCollisionPosition,LastRightHandPosition);
@@ -131,6 +131,10 @@ void UGorillatagMovement::ProcessOffset(float DeltaTime)
 
 	LeftHandFollower->SetActorLocation(LastLeftHandCollisionPosition);
 	RightHandFollower->SetActorLocation(LastRightHandCollisionPosition);
+
+
+	CheckHandUnstick(CurrentLeftHandPosition,bWasLeftHandTouching,true);
+	CheckHandUnstick(CurrentRightHandPosition,bWasRightHandTouching,false);
 
 	if (OneHandColliding)
 	{
